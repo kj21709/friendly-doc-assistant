@@ -1,0 +1,11 @@
+version = 0.1
+
+[default.deploy.parameters]
+stack_name = "friendly-doc-assistant"
+resolve_s3 = true
+capabilities = "CAPABILITY_IAM"
+confirm_changeset = true
+region = "us-east-1"
+fail_on_empty_changeset = false
+parameter_overrides = "LlmModelId=us.anthropic.claude-haiku-4-5-20251001-v1:0"
+

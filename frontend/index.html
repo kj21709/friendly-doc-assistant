@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Dave — Document Assistant</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="shell">
+    <header><div class="avatar">D</div><div><h1>Dave</h1><p>Your friendly document assistant</p></div><span id="status" class="status">Start a session</span></header>
+    <section id="welcome" class="card welcome">
+      <h2>Hi there!</h2><p>Tell me your name to begin. Your name keeps your chat history connected to this session.</p>
+      <form id="nameForm"><label for="name">Your name</label><div class="row"><input id="name" minlength="2" maxlength="80" required autocomplete="name" autocapitalize="characters" placeholder="Enter your name"><button>Continue</button></div></form>
+      <p class="notice">Note: names are not authentication. Names are used to preserve chat history.</p>
+    </section>
+    <section id="workspace" class="hidden">
+      <div class="card upload">
+        <div><h2>Choose your document</h2><p>Upload a text-based PDF or TXT file (maximum 12 MB). Each file gets its own isolated knowledge index.</p></div>
+        <label class="existing">Previous documents<select id="documents"><option value="">None ready</option></select></label>
+        <label class="file-button">Choose file<input id="file" type="file" accept=".pdf,.txt,application/pdf,text/plain"></label>
+        <div id="fileInfo" class="file-info"></div>
+      </div>
+      <section class="card chat-card">
+        <div id="messages" class="messages" aria-live="polite"><div class="message assistant">Upload a document and I’ll answer questions using only that document.</div></div>
+        <form id="chatForm" class="composer"><textarea id="question" maxlength="2000" rows="1" disabled placeholder="Ask about your document, or type history, clear history, or exit…"></textarea><button id="send" disabled>Send</button></form>
+      </section>
+    </section>
+  </main>
+  <script src="config.js"></script><script src="app.js"></script>
+</body>
+</html>

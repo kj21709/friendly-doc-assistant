@@ -1,0 +1,377 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Friendly per-document RAG assistant with S3, Lambda, Bedrock, DynamoDB, API Gateway, and CloudFront.
+
+Parameters:
+  BedrockRegion:
+    Type: String
+    Default: us-east-1
+  EmbeddingModelId:
+    Type: String
+    Default: amazon.titan-embed-text-v2:0
+  LlmModelId:
+    Type: String
+    Default: us.anthropic.claude-haiku-4-5-20251001-v1:0
+  InferenceProfileId:
+    Type: String
+    Default: global.anthropic.claude-haiku-4-5-20251001-v1:0
+  UseInferenceProfile:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+  SonnetFallbackModelId:
+    Type: String
+    Default: anthropic.claude-sonnet-4-5-20250929-v1:0
+  NovaLiteFallbackModelId:
+    Type: String
+    Default: amazon.nova-lite-v1:0
+  NovaMicroFallbackModelId:
+    Type: String
+    Default: amazon.nova-micro-v1:0
+  LogRetentionDays:
+    Type: Number
+    Default: 14
+    AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1096, 1827, 2192, 2557, 2922, 3288, 3653]
+  ChunkSize:
+    Type: Number
+    Default: 900
+  ChunkOverlap:
+    Type: Number
+    Default: 150
+  EmbeddingDimensions:
+    Type: Number
+    Default: 512
+    AllowedValues: [256, 512, 1024]
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Architectures: [arm64]
+    CodeUri: backend/
+    Tracing: Active
+    Environment:
+      Variables:
+        BEDROCK_REGION: !Ref BedrockRegion
+        DOCUMENT_BUCKET: !Ref DocumentBucket
+        DOCUMENTS_TABLE: !Ref DocumentsTable
+        HISTORY_TABLE: !Ref ChatHistoryTable
+        EMBED_MODEL_ID: !Ref EmbeddingModelId
+        EMBEDDING_DIMENSIONS: !Ref EmbeddingDimensions
+        LLM_MODEL_ID: !Ref LlmModelId
+        ALLOWED_ORIGIN: '*'
+
+Resources:
+  Api:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      CorsConfiguration:
+        AllowOrigins: ['*']
+        AllowHeaders: [content-type]
+        AllowMethods: [GET, POST, DELETE, OPTIONS]
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 20
+        ThrottlingRateLimit: 10
+
+  WebsiteBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: {SSEAlgorithm: AES256}
+      VersioningConfiguration: {Status: Enabled}
+
+  DocumentBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: {SSEAlgorithm: AES256}
+      VersioningConfiguration: {Status: Enabled}
+      NotificationConfiguration:
+        EventBridgeConfiguration: {EventBridgeEnabled: true}
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders: ['*']
+            AllowedMethods: [PUT]
+            AllowedOrigins: ['*']
+            MaxAge: 900
+      LifecycleConfiguration:
+        Rules:
+          - Id: AbortIncompleteUploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload: {DaysAfterInitiation: 1}
+
+  DocumentsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - {AttributeName: userId, AttributeType: S}
+        - {AttributeName: documentId, AttributeType: S}
+      KeySchema:
+        - {AttributeName: userId, KeyType: HASH}
+        - {AttributeName: documentId, KeyType: RANGE}
+      GlobalSecondaryIndexes:
+        - IndexName: DocumentIdIndex
+          KeySchema:
+            - {AttributeName: documentId, KeyType: HASH}
+          Projection: {ProjectionType: ALL}
+      PointInTimeRecoverySpecification: {PointInTimeRecoveryEnabled: true}
+      SSESpecification: {SSEEnabled: true}
+
+  ChatHistoryTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - {AttributeName: userId, AttributeType: S}
+        - {AttributeName: timestamp, AttributeType: S}
+      KeySchema:
+        - {AttributeName: userId, KeyType: HASH}
+        - {AttributeName: timestamp, KeyType: RANGE}
+      PointInTimeRecoverySpecification: {PointInTimeRecoveryEnabled: true}
+      SSESpecification: {SSEEnabled: true}
+
+  ApiFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: lambda.amazonaws.com}
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess
+      Policies:
+        - PolicyName: AssistantDataAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject]
+                Resource: !Sub ${DocumentBucket.Arn}/*
+              - Effect: Allow
+                Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:UpdateItem, dynamodb:DeleteItem, dynamodb:BatchWriteItem, dynamodb:Query]
+                Resource: [!GetAtt DocumentsTable.Arn, !GetAtt ChatHistoryTable.Arn]
+              - Effect: Allow
+                Action: bedrock:InvokeModel
+                Resource: '*'
+
+  UploadFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: upload_api.handler
+      Role: !GetAtt ApiFunctionRole.Arn
+      Timeout: 15
+      Events:
+        Upload: {Type: HttpApi, Properties: {ApiId: !Ref Api, Path: /uploads, Method: POST}}
+
+  StatusFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: document_status.handler
+      Role: !GetAtt ApiFunctionRole.Arn
+      Timeout: 10
+      Events:
+        Status: {Type: HttpApi, Properties: {ApiId: !Ref Api, Path: /documents/status, Method: GET}}
+
+  ListDocumentsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: list_documents.handler
+      Role: !GetAtt ApiFunctionRole.Arn
+      Timeout: 10
+      Events:
+        List: {Type: HttpApi, Properties: {ApiId: !Ref Api, Path: /documents, Method: GET}}
+
+  ChatFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub ${AWS::StackName}-chat
+      Handler: agent_v7.handler
+      Role: !GetAtt ApiFunctionRole.Arn
+      Timeout: 29
+      MemorySize: 1536
+      Layers: [!Ref RagDependenciesLayer]
+      Environment:
+        Variables:
+          BEDROCK_INFERENCE_PROFILE_ARN: !Sub arn:${AWS::Partition}:bedrock:${BedrockRegion}:${AWS::AccountId}:inference-profile/${InferenceProfileId}
+          BEDROCK_LLM_MODEL_ID: !Ref LlmModelId
+          BEDROCK_USE_INFERENCE_PROFILE: !Ref UseInferenceProfile
+          BEDROCK_SONNET_FALLBACK_MODEL_ID: !Ref SonnetFallbackModelId
+          BEDROCK_NOVA_LITE_MODEL_ID: !Ref NovaLiteFallbackModelId
+          BEDROCK_NOVA_MICRO_MODEL_ID: !Ref NovaMicroFallbackModelId
+          BEDROCK_MAX_TOKENS: '500'
+          BEDROCK_TEMPERATURE: '0.2'
+          BEDROCK_TOP_P: '0.9'
+      LoggingConfig:
+        LogFormat: JSON
+        ApplicationLogLevel: INFO
+        SystemLogLevel: WARN
+        LogGroup: !Ref ChatLogGroup
+      Events:
+        Chat: {Type: HttpApi, Properties: {ApiId: !Ref Api, Path: /chat, Method: POST}}
+
+  ChatLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${AWS::StackName}-chat
+      RetentionInDays: !Ref LogRetentionDays
+
+  ChatHistoryFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: chat_history.handler
+      Role: !GetAtt ApiFunctionRole.Arn
+      Timeout: 29
+      Events:
+        ListHistory: {Type: HttpApi, Properties: {ApiId: !Ref Api, Path: /history, Method: GET}}
+        ClearHistory: {Type: HttpApi, Properties: {ApiId: !Ref Api, Path: /history, Method: DELETE}}
+
+  VectorizerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: embed_documents_v5_s3.handler
+      Role: !GetAtt VectorizerRole.Arn
+      Timeout: 900
+      MemorySize: 2048
+      EphemeralStorage: {Size: 1024}
+      Layers: [!Ref RagDependenciesLayer]
+      Environment:
+        Variables:
+          CHUNK_SIZE: !Ref ChunkSize
+          CHUNK_OVERLAP: !Ref ChunkOverlap
+          MAX_CHUNKS: 2000
+
+  RagDependenciesLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      ContentUri: layers/rag/
+      CompatibleRuntimes: [python3.12]
+      CompatibleArchitectures: [arm64]
+      RetentionPolicy: Delete
+    Metadata:
+      BuildMethod: python3.12
+      BuildArchitecture: arm64
+
+  VectorizerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: lambda.amazonaws.com}
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess
+      Policies:
+        - PolicyName: VectorizerAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject]
+                Resource: !Sub ${DocumentBucket.Arn}/*
+              - Effect: Allow
+                Action: [dynamodb:GetItem, dynamodb:UpdateItem, dynamodb:Query]
+                Resource:
+                  - !GetAtt DocumentsTable.Arn
+                  - !Sub ${DocumentsTable.Arn}/index/*
+              - Effect: Allow
+                Action: bedrock:InvokeModel
+                Resource: '*'
+
+  UploadEventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      EventPattern:
+        source: [aws.s3]
+        detail-type: [Object Created]
+        detail:
+          bucket: {name: [!Ref DocumentBucket]}
+          object: {key: [{prefix: documents/}]}
+      Targets:
+        - Arn: !GetAtt VectorizerFunction.Arn
+          Id: Vectorizer
+
+  VectorizerInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref VectorizerFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt UploadEventRule.Arn
+
+  OriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub ${AWS::StackName}-website-oac
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        DefaultRootObject: index.html
+        HttpVersion: http2and3
+        PriceClass: PriceClass_100
+        Origins:
+          - Id: WebsiteOrigin
+            DomainName: !GetAtt WebsiteBucket.RegionalDomainName
+            OriginAccessControlId: !Ref OriginAccessControl
+            S3OriginConfig: {OriginAccessIdentity: ''}
+        DefaultCacheBehavior:
+          TargetOriginId: WebsiteOrigin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS]
+          CachedMethods: [GET, HEAD, OPTIONS]
+          Compress: true
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+
+  WebsiteBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref WebsiteBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: cloudfront.amazonaws.com}
+            Action: s3:GetObject
+            Resource: !Sub ${WebsiteBucket.Arn}/*
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${Distribution}
+
+Outputs:
+  ApiUrl:
+    Value: !Sub https://${Api}.execute-api.${AWS::Region}.${AWS::URLSuffix}
+  WebsiteBucketName:
+    Value: !Ref WebsiteBucket
+  DocumentBucketName:
+    Value: !Ref DocumentBucket
+  DistributionId:
+    Value: !Ref Distribution
+  WebsiteUrl:
+    Value: !Sub https://${Distribution.DomainName}
+  ChatLogGroupName:
+    Description: CloudWatch log group for chat and Bedrock invocation troubleshooting
+    Value: !Ref ChatLogGroup

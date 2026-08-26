@@ -1,0 +1,8 @@
+.aws-sam/
+packaged.yaml
+__pycache__/
+*.py[cod]
+.DS_Store
+docs/original-architecture.png
+
+
