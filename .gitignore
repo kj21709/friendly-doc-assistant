@@ -4,5 +4,7 @@ __pycache__/
 *.py[cod]
 .DS_Store
 docs/original-architecture.png
+.zprofile
+
 
 

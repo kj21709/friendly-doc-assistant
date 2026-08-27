@@ -1,5 +1,9 @@
 name: Pipeline
 
+permissions:
+  id-token: write
+  contents: read
+
 on:
   push:
     branches:
@@ -10,22 +14,20 @@ on:
       - 'feature**'
 
 env:
-  PIPELINE_USER_ACCESS_KEY_ID: ${{ secrets.rag_secret }}
-  PIPELINE_USER_SECRET_ACCESS_KEY: ${{ secrets.fjlo_mlzy_8l@dal_lkad$) }}
   SAM_TEMPLATE: template.yaml
-  TESTING_STACK_NAME: sam-app
-  TESTING_PIPELINE_EXECUTION_ROLE: arn:aws:iam::843553758024:role/aws-sam-cli-managed-prod-pipe-PipelineExecutionRole-2Cpjcr2c25uW
-  TESTING_CLOUDFORMATION_EXECUTION_ROLE: arn:aws:iam::843553758024:role/aws-sam-cli-managed-prod--CloudFormationExecutionRo-xAdTja0oTLAd
-  TESTING_ARTIFACTS_BUCKET: aws-sam-cli-managed-prod-pipeline--artifactsbucket-mbapb5fmbnma
+  TESTING_STACK_NAME: friendly-doc-assistant-test
+  TESTING_PIPELINE_EXECUTION_ROLE: arn:aws:iam::843553758024:role/aws-sam-cli-managed-test-pipe-PipelineExecutionRole-ownjmVvUdKX0
+  TESTING_CLOUDFORMATION_EXECUTION_ROLE: arn:aws:iam::843553758024:role/aws-sam-cli-managed-test--CloudFormationExecutionRo-G2Cj1ibHvtS9
+  TESTING_ARTIFACTS_BUCKET: aws-sam-cli-managed-test-pipeline--artifactsbucket-kxjn7mxkpitm
   # If there are functions with "Image" PackageType in your template,
   # uncomment the line below and add "--image-repository ${TESTING_IMAGE_REPOSITORY}" to
   # testing "sam package" and "sam deploy" commands.
   # TESTING_IMAGE_REPOSITORY = '0123456789.dkr.ecr.region.amazonaws.com/repository-name'
   TESTING_REGION: us-east-1
-  PROD_STACK_NAME: sam-app
-  PROD_PIPELINE_EXECUTION_ROLE: arn:aws:iam::843553758024:role/aws-sam-cli-managed-test-pipe-PipelineExecutionRole-ownjmVvUdKX0
-  PROD_CLOUDFORMATION_EXECUTION_ROLE: arn:aws:iam::843553758024:role/aws-sam-cli-managed-test--CloudFormationExecutionRo-G2Cj1ibHvtS9
-  PROD_ARTIFACTS_BUCKET: aws-sam-cli-managed-test-pipeline--artifactsbucket-kxjn7mxkpitm
+  PROD_STACK_NAME: friendly-doc-assistant-prod
+  PROD_PIPELINE_EXECUTION_ROLE: arn:aws:iam::843553758024:role/aws-sam-cli-managed-prod-pipe-PipelineExecutionRole-2Cpjcr2c25uW
+  PROD_CLOUDFORMATION_EXECUTION_ROLE: arn:aws:iam::843553758024:role/aws-sam-cli-managed-prod--CloudFormationExecutionRo-xAdTja0oTLAd
+  PROD_ARTIFACTS_BUCKET: aws-sam-cli-managed-prod-pipeline--artifactsbucket-mbapb5fmbnma
   # If there are functions with "Image" PackageType in your template,
   # uncomment the line below and add "--image-repository ${PROD_IMAGE_REPOSITORY}" to
   # prod "sam package" and "sam deploy" commands.
@@ -50,16 +52,13 @@ jobs:
         with:
           use-installer: true
 
-      - name: Assume the testing pipeline user role
+      - name: Assume the testing pipeline role with OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ env.PIPELINE_USER_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ env.PIPELINE_USER_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.TESTING_REGION }}
           role-to-assume: ${{ env.TESTING_PIPELINE_EXECUTION_ROLE }}
-          role-session-name: testing-packaging
+          aws-region: ${{ env.TESTING_REGION }}
+          role-session-name: github-actions-testing
           role-duration-seconds: 3600
-          role-skip-session-tagging: true
 
       - name: Delete feature branch stack
         env:
@@ -85,16 +84,13 @@ jobs:
           use-installer: true
       - run: sam build --template ${SAM_TEMPLATE} --use-container
 
-      - name: Assume the testing pipeline user role
+      - name: Assume the testing pipeline role with OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ env.PIPELINE_USER_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ env.PIPELINE_USER_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.TESTING_REGION }}
           role-to-assume: ${{ env.TESTING_PIPELINE_EXECUTION_ROLE }}
-          role-session-name: feature-deployment
+          aws-region: ${{ env.TESTING_REGION }}
+          role-session-name: github-actions-testing
           role-duration-seconds: 3600
-          role-skip-session-tagging: true
 
       - name: Deploy to feature stack in the testing account
         shell: bash
@@ -119,16 +115,13 @@ jobs:
       - name: Build resources
         run: sam build --template ${SAM_TEMPLATE} --use-container
 
-      - name: Assume the testing pipeline user role
+      - name: Assume the testing pipeline role with OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ env.PIPELINE_USER_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ env.PIPELINE_USER_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.TESTING_REGION }}
           role-to-assume: ${{ env.TESTING_PIPELINE_EXECUTION_ROLE }}
-          role-session-name: testing-packaging
+          aws-region: ${{ env.TESTING_REGION }}
+          role-session-name: github-actions-testing
           role-duration-seconds: 3600
-          role-skip-session-tagging: true
 
       - name: Upload artifacts to testing artifact buckets
         run: |
@@ -142,16 +135,13 @@ jobs:
           name: packaged-testing.yaml
           path: packaged-testing.yaml
 
-      - name: Assume the prod pipeline user role
+      - name: Assume the production pipeline role with OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ env.PIPELINE_USER_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ env.PIPELINE_USER_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.PROD_REGION }}
           role-to-assume: ${{ env.PROD_PIPELINE_EXECUTION_ROLE }}
-          role-session-name: prod-packaging
+          aws-region: ${{ env.PROD_REGION }}
+          role-session-name: github-actions-production
           role-duration-seconds: 3600
-          role-skip-session-tagging: true
 
       - name: Upload artifacts to production artifact buckets
         run: |
@@ -178,16 +168,13 @@ jobs:
         with:
           name: packaged-testing.yaml
 
-      - name: Assume the testing pipeline user role
+      - name: Assume the testing pipeline role with OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ env.PIPELINE_USER_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ env.PIPELINE_USER_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.TESTING_REGION }}
           role-to-assume: ${{ env.TESTING_PIPELINE_EXECUTION_ROLE }}
-          role-session-name: testing-deployment
+          aws-region: ${{ env.TESTING_REGION }}
+          role-session-name: github-actions-testing
           role-duration-seconds: 3600
-          role-skip-session-tagging: true
 
       - name: Deploy to testing account
         run: |
@@ -224,16 +211,13 @@ jobs:
         with:
           name: packaged-prod.yaml
 
-      - name: Assume the prod pipeline user role
+      - name: Assume the production pipeline role with OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ env.PIPELINE_USER_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ env.PIPELINE_USER_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.PROD_REGION }}
           role-to-assume: ${{ env.PROD_PIPELINE_EXECUTION_ROLE }}
-          role-session-name: prod-deployment
+          aws-region: ${{ env.PROD_REGION }}
+          role-session-name: github-actions-production
           role-duration-seconds: 3600
-          role-skip-session-tagging: true
 
       - name: Deploy to production account
         run: |
