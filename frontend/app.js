@@ -115,7 +115,7 @@ $("documents").addEventListener("change", (event) => {
 $("file").addEventListener("change", async (event) => {
   const file = event.target.files[0];
   if (!file) return;
-  if (file.size > 12 * 1024 * 1024) { message("File is larger than 5 MB.", "system error"); return; }
+  if (file.size > 12 * 1024 * 1024) { message("File is larger than 12 MB.", "system error"); return; }
   clearInterval(pollTimer);
   documentId = "";
   $("fileInfo").textContent = "Preparing upload…";

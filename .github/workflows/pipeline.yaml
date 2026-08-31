@@ -1,17 +1,17 @@
 name: Pipeline
 
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
 permissions:
   id-token: write
   contents: read
 
-on:
-  push:
-    branches:
-      - 'main'
-      - 'feature**'
-  delete:
-    branches:
-      - 'feature**'
+concurrency:
+  group: friendly-doc-assistant-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   SAM_TEMPLATE: template.yaml
@@ -19,212 +19,210 @@ env:
   TESTING_PIPELINE_EXECUTION_ROLE: arn:aws:iam::843553758024:role/aws-sam-cli-managed-test-pipe-PipelineExecutionRole-ownjmVvUdKX0
   TESTING_CLOUDFORMATION_EXECUTION_ROLE: arn:aws:iam::843553758024:role/aws-sam-cli-managed-test--CloudFormationExecutionRo-G2Cj1ibHvtS9
   TESTING_ARTIFACTS_BUCKET: aws-sam-cli-managed-test-pipeline--artifactsbucket-kxjn7mxkpitm
-  # If there are functions with "Image" PackageType in your template,
-  # uncomment the line below and add "--image-repository ${TESTING_IMAGE_REPOSITORY}" to
-  # testing "sam package" and "sam deploy" commands.
-  # TESTING_IMAGE_REPOSITORY = '0123456789.dkr.ecr.region.amazonaws.com/repository-name'
   TESTING_REGION: us-east-1
   PROD_STACK_NAME: friendly-doc-assistant-prod
   PROD_PIPELINE_EXECUTION_ROLE: arn:aws:iam::843553758024:role/aws-sam-cli-managed-prod-pipe-PipelineExecutionRole-2Cpjcr2c25uW
   PROD_CLOUDFORMATION_EXECUTION_ROLE: arn:aws:iam::843553758024:role/aws-sam-cli-managed-prod--CloudFormationExecutionRo-xAdTja0oTLAd
   PROD_ARTIFACTS_BUCKET: aws-sam-cli-managed-prod-pipeline--artifactsbucket-mbapb5fmbnma
-  # If there are functions with "Image" PackageType in your template,
-  # uncomment the line below and add "--image-repository ${PROD_IMAGE_REPOSITORY}" to
-  # prod "sam package" and "sam deploy" commands.
-  # PROD_IMAGE_REPOSITORY = '0123456789.dkr.ecr.region.amazonaws.com/repository-name'
   PROD_REGION: us-east-1
 
 jobs:
-  test:
-    if: github.event_name == 'push'
+  validate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - run: |
-          # trigger the tests here
-
-  delete-feature:
-    if: startsWith(github.event.ref, 'feature') && github.event_name == 'delete'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - uses: aws-actions/setup-sam@v2
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Set up SAM CLI
+        uses: aws-actions/setup-sam@v2
         with:
           use-installer: true
-
-      - name: Assume the testing pipeline role with OIDC
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ env.TESTING_PIPELINE_EXECUTION_ROLE }}
-          aws-region: ${{ env.TESTING_REGION }}
-          role-session-name: github-actions-testing
-          role-duration-seconds: 3600
-
-      - name: Delete feature branch stack
-        env:
-          FEATURE_BRANCH_NAME: ${{ github.event.ref }}
-        run: |
-          sam delete \
-            --stack-name $(echo ${FEATURE_BRANCH_NAME##*/} | tr -cd '[a-zA-Z0-9-]') \
-            --region ${TESTING_REGION} \
-            --no-prompts
-
-  build-and-deploy-feature:
-    # this stage is triggered only for feature branches (feature*),
-    # which will build the stack and deploy to a stack named with branch name.
-    # https://github.com/actions/setup-python
-    # https://github.com/aws-actions/configure-aws-credentials#notice-node12-deprecation-warning
-    if: startsWith(github.ref, 'refs/heads/feature')
-    needs: [test]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - uses: aws-actions/setup-sam@v2
-        with:
-          use-installer: true
-      - run: sam build --template ${SAM_TEMPLATE} --use-container
-
-      - name: Assume the testing pipeline role with OIDC
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ env.TESTING_PIPELINE_EXECUTION_ROLE }}
-          aws-region: ${{ env.TESTING_REGION }}
-          role-session-name: github-actions-testing
-          role-duration-seconds: 3600
-
-      - name: Deploy to feature stack in the testing account
-        shell: bash
-        run: |
-          sam deploy --stack-name $(echo ${GITHUB_REF##*/} | tr -cd '[a-zA-Z0-9-]') \
-            --capabilities CAPABILITY_IAM \
-            --region ${TESTING_REGION} \
-            --s3-bucket ${TESTING_ARTIFACTS_BUCKET} \
-            --no-fail-on-empty-changeset \
-            --role-arn ${TESTING_CLOUDFORMATION_EXECUTION_ROLE}
+      - name: Install validation tools
+        run: python -m pip install cfn-lint
+      - name: Compile Python
+        run: python -m compileall backend tests
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -v
+      - name: Validate SAM template
+        run: sam validate --lint --template-file "${SAM_TEMPLATE}"
 
   build-and-package:
-    if: github.ref == 'refs/heads/main'
-    needs: [test]
+    needs: [validate]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - uses: aws-actions/setup-sam@v2
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up SAM CLI
+        uses: aws-actions/setup-sam@v2
         with:
           use-installer: true
-
-      - name: Build resources
-        run: sam build --template ${SAM_TEMPLATE} --use-container
-
-      - name: Assume the testing pipeline role with OIDC
+      - name: Build Linux ARM64 resources
+        run: sam build --template "${SAM_TEMPLATE}" --use-container
+      - name: Assume testing pipeline role with OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ env.TESTING_PIPELINE_EXECUTION_ROLE }}
           aws-region: ${{ env.TESTING_REGION }}
-          role-session-name: github-actions-testing
-          role-duration-seconds: 3600
-
-      - name: Upload artifacts to testing artifact buckets
+          role-session-name: github-testing-package
+      - name: Package testing artifacts
         run: |
           sam package \
-            --s3-bucket ${TESTING_ARTIFACTS_BUCKET} \
-            --region ${TESTING_REGION} \
+            --s3-bucket "${TESTING_ARTIFACTS_BUCKET}" \
+            --region "${TESTING_REGION}" \
             --output-template-file packaged-testing.yaml
-
-      - uses: actions/upload-artifact@v4
+      - name: Save testing template
+        uses: actions/upload-artifact@v4
         with:
-          name: packaged-testing.yaml
+          name: packaged-testing
           path: packaged-testing.yaml
-
-      - name: Assume the production pipeline role with OIDC
+          if-no-files-found: error
+          retention-days: 7
+      - name: Assume production pipeline role with OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ env.PROD_PIPELINE_EXECUTION_ROLE }}
           aws-region: ${{ env.PROD_REGION }}
-          role-session-name: github-actions-production
-          role-duration-seconds: 3600
-
-      - name: Upload artifacts to production artifact buckets
+          role-session-name: github-production-package
+      - name: Package production artifacts
         run: |
           sam package \
-            --s3-bucket ${PROD_ARTIFACTS_BUCKET} \
-            --region ${PROD_REGION} \
+            --s3-bucket "${PROD_ARTIFACTS_BUCKET}" \
+            --region "${PROD_REGION}" \
             --output-template-file packaged-prod.yaml
-
-      - uses: actions/upload-artifact@v4
+      - name: Save production template
+        uses: actions/upload-artifact@v4
         with:
-          name: packaged-prod.yaml
+          name: packaged-prod
           path: packaged-prod.yaml
+          if-no-files-found: error
+          retention-days: 7
 
   deploy-testing:
-    if: github.ref == 'refs/heads/main'
     needs: [build-and-package]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - uses: aws-actions/setup-sam@v2
+      - name: Download testing template
+        uses: actions/download-artifact@v4
+        with:
+          name: packaged-testing
+      - name: Set up SAM CLI
+        uses: aws-actions/setup-sam@v2
         with:
           use-installer: true
-      - uses: actions/download-artifact@v4
-        with:
-          name: packaged-testing.yaml
-
-      - name: Assume the testing pipeline role with OIDC
+      - name: Assume testing pipeline role with OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ env.TESTING_PIPELINE_EXECUTION_ROLE }}
           aws-region: ${{ env.TESTING_REGION }}
-          role-session-name: github-actions-testing
-          role-duration-seconds: 3600
-
-      - name: Deploy to testing account
+          role-session-name: github-testing-deploy
+      - name: Deploy testing stack
         run: |
-          sam deploy --stack-name ${TESTING_STACK_NAME} \
-            --template packaged-testing.yaml \
+          sam deploy \
+            --stack-name "${TESTING_STACK_NAME}" \
+            --template-file packaged-testing.yaml \
             --capabilities CAPABILITY_IAM \
-            --region ${TESTING_REGION} \
-            --s3-bucket ${TESTING_ARTIFACTS_BUCKET} \
+            --region "${TESTING_REGION}" \
+            --s3-bucket "${TESTING_ARTIFACTS_BUCKET}" \
+            --no-confirm-changeset \
             --no-fail-on-empty-changeset \
-            --role-arn ${TESTING_CLOUDFORMATION_EXECUTION_ROLE}
+            --role-arn "${TESTING_CLOUDFORMATION_EXECUTION_ROLE}" \
+            --parameter-overrides \
+              BedrockRegion=us-east-1 \
+              EmbeddingModelId=amazon.titan-embed-text-v2:0 \
+              LlmModelId=us.anthropic.claude-haiku-4-5-20251001-v1:0 \
+              InferenceProfileId=global.anthropic.claude-haiku-4-5-20251001-v1:0 \
+              UseInferenceProfile=true \
+              LogRetentionDays=7
 
-  integration-test:
-    if: github.ref == 'refs/heads/main'
+  publish-testing-frontend:
     needs: [deploy-testing]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - run: |
-          # trigger the integration tests here
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Assume testing pipeline role with OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.TESTING_PIPELINE_EXECUTION_ROLE }}
+          aws-region: ${{ env.TESTING_REGION }}
+          role-session-name: github-testing-frontend
+      - name: Publish testing frontend
+        run: ./scripts/publish-frontend.sh "${TESTING_STACK_NAME}" "${TESTING_REGION}"
 
-  deploy-prod:
-    if: github.ref == 'refs/heads/main'
+  integration-test:
+    needs: [publish-testing-frontend]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Assume testing pipeline role with OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.TESTING_PIPELINE_EXECUTION_ROLE }}
+          aws-region: ${{ env.TESTING_REGION }}
+          role-session-name: github-testing-smoke
+      - name: Read testing endpoint
+        run: |
+          API_URL=$(aws cloudformation describe-stacks \
+            --stack-name "${TESTING_STACK_NAME}" \
+            --region "${TESTING_REGION}" \
+            --query "Stacks[0].Outputs[?OutputKey=='ApiUrl'].OutputValue" \
+            --output text)
+          echo "API_URL=${API_URL}" >> "${GITHUB_ENV}"
+      - name: Run API smoke test
+        run: ./scripts/smoke-test.sh "${API_URL}"
+
+  deploy-production:
     needs: [integration-test]
     runs-on: ubuntu-latest
-    # Configure GitHub Action Environment to have a manual approval step before deployment to production
-    # https://docs.github.com/en/actions/reference/environments
-    # environment: <configured-environment>
+    environment: production
     steps:
-      - uses: actions/checkout@v3
-      - uses: aws-actions/setup-sam@v2
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Download production template
+        uses: actions/download-artifact@v4
+        with:
+          name: packaged-prod
+      - name: Set up SAM CLI
+        uses: aws-actions/setup-sam@v2
         with:
           use-installer: true
-      - uses: actions/download-artifact@v4
-        with:
-          name: packaged-prod.yaml
-
-      - name: Assume the production pipeline role with OIDC
+      - name: Assume production pipeline role with OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ env.PROD_PIPELINE_EXECUTION_ROLE }}
           aws-region: ${{ env.PROD_REGION }}
-          role-session-name: github-actions-production
-          role-duration-seconds: 3600
-
-      - name: Deploy to production account
+          role-session-name: github-production-deploy
+      - name: Deploy production stack
         run: |
-          sam deploy --stack-name ${PROD_STACK_NAME} \
-            --template packaged-prod.yaml \
+          sam deploy \
+            --stack-name "${PROD_STACK_NAME}" \
+            --template-file packaged-prod.yaml \
             --capabilities CAPABILITY_IAM \
-            --region ${PROD_REGION} \
-            --s3-bucket ${PROD_ARTIFACTS_BUCKET} \
+            --region "${PROD_REGION}" \
+            --s3-bucket "${PROD_ARTIFACTS_BUCKET}" \
+            --no-confirm-changeset \
             --no-fail-on-empty-changeset \
-            --role-arn ${PROD_CLOUDFORMATION_EXECUTION_ROLE}
+            --role-arn "${PROD_CLOUDFORMATION_EXECUTION_ROLE}" \
+            --parameter-overrides \
+              BedrockRegion=us-east-1 \
+              EmbeddingModelId=amazon.titan-embed-text-v2:0 \
+              LlmModelId=us.anthropic.claude-haiku-4-5-20251001-v1:0 \
+              InferenceProfileId=global.anthropic.claude-haiku-4-5-20251001-v1:0 \
+              UseInferenceProfile=true \
+              LogRetentionDays=14
+      - name: Publish production frontend
+        run: ./scripts/publish-frontend.sh "${PROD_STACK_NAME}" "${PROD_REGION}"
+      - name: Read production endpoint
+        run: |
+          API_URL=$(aws cloudformation describe-stacks \
+            --stack-name "${PROD_STACK_NAME}" \
+            --region "${PROD_REGION}" \
+            --query "Stacks[0].Outputs[?OutputKey=='ApiUrl'].OutputValue" \
+            --output text)
+          echo "API_URL=${API_URL}" >> "${GITHUB_ENV}"
+      - name: Run production API smoke test
+        run: ./scripts/smoke-test.sh "${API_URL}"

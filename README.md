@@ -165,19 +165,74 @@ aws logs tail "$LOG_GROUP" --region us-east-1 --since 10m --follow
 
 Look for `AccessDeniedException`, `FTUFormNotFilled`, `ValidationException`, or an SCP-related denial. Redeploy after model access or policy changes; no application code change is required for those account-level fixes.
 
-## CI/CD-ready project structure
+## GitHub Actions CI/CD pipeline
 
-Keep the first phase manual and CloudFormation-driven so you can verify every resource and explain the deployment in an interview. The same `template.yaml`, container build, parameters, and tests can later become pipeline stages without changing the application architecture:
+The workflow in `.github/workflows/pipeline.yaml` uses GitHub OIDC and short-lived AWS credentials. It runs automatically for a push to `main` and can also be started from the GitHub Actions **Run workflow** button. It does not use repository access-key secrets or AWS CodePipeline.
 
-1. Source — GitHub connection or CodeCommit.
-2. Validate — unit tests, `sam validate --lint`, and security/template checks.
-3. Build/package — `sam build --use-container` and artifact upload.
-4. Test deployment — CloudFormation change set in a test stack.
-5. Smoke test — upload a known TXT file and verify grounded/refusal responses.
-6. Manual approval.
-7. Production deployment — execute the production CloudFormation change set and publish the frontend.
+The stages run in this order:
 
-For a portfolio, this progression demonstrates infrastructure as code, controlled releases, environment promotion, approval gates, rollback through CloudFormation, and operational testing without prematurely adding costly services.
+1. Validate — Python 3.12 compilation, unit tests, and `sam validate --lint`.
+2. Build/package — containerized SAM build for Linux ARM64, followed by separate test and production packages.
+3. Deploy test — deploy `friendly-doc-assistant-test` with seven-day chat-log retention.
+4. Publish test frontend — inject the test API URL, sync the private website bucket, and invalidate CloudFront.
+5. Integration test — call the deployed `/documents` endpoint and validate its JSON contract.
+6. Production approval — the `production` GitHub Environment pauses the workflow for an authorized reviewer.
+7. Deploy production — deploy `friendly-doc-assistant-prod`, publish its frontend, and run the same API smoke test with 14-day chat-log retention.
+
+Before the first run, configure the following outside the repository:
+
+- Create the GitHub OIDC provider in AWS IAM with audience `sts.amazonaws.com`.
+- Allow the test pipeline role to assume the role from `repo:kj21709/friendly-doc-assistant:ref:refs/heads/main`.
+- Allow the production pipeline role from both `repo:kj21709/friendly-doc-assistant:ref:refs/heads/main` (packaging) and `repo:kj21709/friendly-doc-assistant:environment:production` (deployment).
+- Create a GitHub Environment named `production`, restrict it to `main`, and configure a required reviewer.
+- Ensure both pipeline execution roles can call `cloudformation:DescribeStacks`, sync the corresponding generated website bucket (`s3:ListBucket`, `s3:GetObject`, `s3:PutObject`, and `s3:DeleteObject`), and call `cloudfront:CreateInvalidation`. The SAM bootstrap roles normally cover packaging and CloudFormation role assumption; frontend publication may require this additional inline policy.
+- Keep each CloudFormation execution role trusted by CloudFormation and passable by only its corresponding pipeline execution role.
+
+Attach an inline frontend-publication policy to each pipeline execution role if those permissions are not already present. Replace `<STACK_NAME>` with `friendly-doc-assistant-test` on the test role and `friendly-doc-assistant-prod` on the production role:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": "cloudformation:DescribeStacks",
+      "Resource": "arn:aws:cloudformation:us-east-1:843553758024:stack/<STACK_NAME>/*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::<STACK_NAME>-websitebucket-*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+      "Resource": "arn:aws:s3:::<STACK_NAME>-websitebucket-*/*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": "cloudfront:CreateInvalidation",
+      "Resource": "arn:aws:cloudfront::843553758024:distribution/*"
+    }
+  ]
+}
+```
+
+CloudFormation lowercases generated S3 bucket names, so the stack-name patterns above are lowercase intentionally. If your organization disallows wildcard distribution access, deploy the stack once, read its `DistributionId` output, and replace `distribution/*` with that exact distribution ID.
+
+To start the pipeline with a commit:
+
+```bash
+git add .github/workflows/pipeline.yaml scripts README.md frontend
+git commit -m "Complete GitHub Actions deployment pipeline"
+git push origin main
+```
+
+Open **GitHub → friendly-doc-assistant → Actions → Pipeline** and follow the active run. After test deployment, publication, and the smoke test pass, approve the pending `production` Environment deployment. The workflow then deploys and verifies production.
+
+For a manual run without a new commit, open **Actions → Pipeline → Run workflow**, choose `main`, and select **Run workflow**. GitHub runs the exact committed revision; local uncommitted changes are never included.
+
+The smoke test is intentionally non-destructive: it verifies API Gateway, Lambda, and DynamoDB connectivity plus the response contract without uploading a document or incurring an LLM request. Run a full upload/vectorization/chat acceptance test manually after the first successful pipeline, then automate that longer test separately if its Bedrock cost and duration are acceptable.
 
 ## Cleanup
 
