@@ -20,6 +20,38 @@ env:
   TESTING_CLOUDFORMATION_EXECUTION_ROLE: arn:aws:iam::843553758024:role/aws-sam-cli-managed-test--CloudFormationExecutionRo-G2Cj1ibHvtS9
   TESTING_ARTIFACTS_BUCKET: aws-sam-cli-managed-test-pipeline--artifactsbucket-kxjn7mxkpitm
   TESTING_REGION: us-east-1
+
+  - name: Show GitHub OIDC claims
+  shell: bash
+  run: |
+    RESPONSE=$(curl \
+      --silent \
+      --show-error \
+      --fail \
+      -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+      "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com")
+
+    ID_TOKEN=$(python3 -c \
+      'import json,sys; print(json.load(sys.stdin)["value"])' \
+      <<< "${RESPONSE}")
+
+    ID_TOKEN="${ID_TOKEN}" python3 - <<'PY'
+    import base64
+    import json
+    import os
+
+    encoded = os.environ["ID_TOKEN"].split(".")[1]
+    encoded += "=" * (-len(encoded) % 4)
+    claims = json.loads(base64.urlsafe_b64decode(encoded))
+
+    print("aud:", claims.get("aud"))
+    print("sub:", claims.get("sub"))
+    print("repository:", claims.get("repository"))
+    print("repository_id:", claims.get("1347467002"))
+    print("repository_owner_id:", claims.get("244645721"))
+    print("ref:", claims.get("ref"))
+    print("environment:", claims.get("environment"))
+    PY
   PROD_STACK_NAME: friendly-doc-assistant-prod
   PROD_PIPELINE_EXECUTION_ROLE: arn:aws:iam::843553758024:role/aws-sam-cli-managed-prod-pipe-PipelineExecutionRole-2Cpjcr2c25uW
   PROD_CLOUDFORMATION_EXECUTION_ROLE: arn:aws:iam::843553758024:role/aws-sam-cli-managed-prod--CloudFormationExecutionRo-xAdTja0oTLAd
@@ -87,6 +119,7 @@ jobs:
           role-to-assume: ${{ env.PROD_PIPELINE_EXECUTION_ROLE }}
           aws-region: ${{ env.PROD_REGION }}
           role-session-name: github-production-package
+          unset-current-credentials: true
       - name: Package production artifacts
         run: |
           sam package \
