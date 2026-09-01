@@ -62,33 +62,6 @@ jobs:
           use-installer: true
       - name: Build Linux ARM64 resources
         run: sam build --template "${SAM_TEMPLATE}" --use-container
-      - name: Assume testing pipeline role with OIDC
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ env.TESTING_PIPELINE_EXECUTION_ROLE }}
-          aws-region: ${{ env.TESTING_REGION }}
-          role-session-name: github-testing-package
-      - name: Package testing artifacts
-        run: |
-          sam package \
-            --s3-bucket "${TESTING_ARTIFACTS_BUCKET}" \
-            --region "${TESTING_REGION}" \
-            --output-template-file packaged-testing.yaml
-      - name: Save testing template
-        uses: actions/upload-artifact@v4
-        with:
-          name: packaged-testing
-          path: packaged-testing.yaml
-          if-no-files-found: error
-          retention-days: 7
-    ## Diagnostic steps to show OIDC claims and assume role for production packaging
-      - name: Save testing template
-        uses: actions/upload-artifact@v4
-        with:
-          name: packaged-testing
-          path: packaged-testing.yaml
-          if-no-files-found: error
-          retention-days: 7
 
       - name: Show GitHub OIDC claims
         shell: bash
@@ -122,20 +95,34 @@ jobs:
           print("environment:", claims.get("environment"))
           PY
 
+      - name: Assume testing pipeline role with OIDC
+        uses: aws-actions/configure-aws-credentials@v6.2.3
+        with:
+          role-to-assume: ${{ env.TESTING_PIPELINE_EXECUTION_ROLE }}
+          aws-region: ${{ env.TESTING_REGION }}
+          role-session-name: github-testing-package
+          audience: sts.amazonaws.com
+          unset-current-credentials: true
+      - name: Package testing artifacts
+        run: |
+          sam package \
+            --s3-bucket "${TESTING_ARTIFACTS_BUCKET}" \
+            --region "${TESTING_REGION}" \
+            --output-template-file packaged-testing.yaml
+      - name: Save testing template
+        uses: actions/upload-artifact@v4
+        with:
+          name: packaged-testing
+          path: packaged-testing.yaml
+          if-no-files-found: error
+          retention-days: 7
       - name: Assume production pipeline role with OIDC
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6.2.3
         with:
           role-to-assume: ${{ env.PROD_PIPELINE_EXECUTION_ROLE }}
           aws-region: ${{ env.PROD_REGION }}
           role-session-name: github-production-package
-          unset-current-credentials: true 
-## Diag steps end
-      - name: Assume production pipeline role with OIDC
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ env.PROD_PIPELINE_EXECUTION_ROLE }}
-          aws-region: ${{ env.PROD_REGION }}
-          role-session-name: github-production-package
+          audience: sts.amazonaws.com
           unset-current-credentials: true
       - name: Package production artifacts
         run: |
@@ -164,7 +151,7 @@ jobs:
         with:
           use-installer: true
       - name: Assume testing pipeline role with OIDC
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6.2.3
         with:
           role-to-assume: ${{ env.TESTING_PIPELINE_EXECUTION_ROLE }}
           aws-region: ${{ env.TESTING_REGION }}
@@ -195,7 +182,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
       - name: Assume testing pipeline role with OIDC
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6.2.3
         with:
           role-to-assume: ${{ env.TESTING_PIPELINE_EXECUTION_ROLE }}
           aws-region: ${{ env.TESTING_REGION }}
@@ -210,7 +197,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
       - name: Assume testing pipeline role with OIDC
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6.2.3
         with:
           role-to-assume: ${{ env.TESTING_PIPELINE_EXECUTION_ROLE }}
           aws-region: ${{ env.TESTING_REGION }}
@@ -242,7 +229,7 @@ jobs:
         with:
           use-installer: true
       - name: Assume production pipeline role with OIDC
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6.2.3
         with:
           role-to-assume: ${{ env.PROD_PIPELINE_EXECUTION_ROLE }}
           aws-region: ${{ env.PROD_REGION }}
