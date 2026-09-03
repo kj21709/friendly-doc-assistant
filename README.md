@@ -250,10 +250,10 @@ The workflow references these predictable resources directly:
 - `friendly-doc-assistant-github-prod`
 - `friendly-doc-assistant-cloudformation-test`
 - `friendly-doc-assistant-cloudformation-prod`
-- `friendly-doc-assistant-test-artifacts-843553758024-us-east-1`
-- `friendly-doc-assistant-prod-artifacts-843553758024-us-east-1`
+- `friendly-doc-assistant-test-artifacts-<account-id>-<region>`
+- `friendly-doc-assistant-prod-artifacts-<account-id>-<region>`
 
-The CloudFormation roles are scoped to AWS services used by this application and can manage only project-prefixed application IAM roles. The GitHub roles can package artifacts, deploy only their corresponding stack through the matching CloudFormation role, publish the matching frontend, and invalidate CloudFront. This separation limits the impact of a compromised workflow while keeping the policy maintainable for a portfolio project.
+The CloudFormation roles are scoped to AWS services used by this application and can manage only project-prefixed application IAM roles. They can also apply the AWS SAM transform, which CloudFormation invokes while creating the application's change set. The GitHub roles can package artifacts, deploy only their corresponding stack through the matching CloudFormation role, publish the matching frontend, and invalidate CloudFront. This separation limits the impact of a compromised workflow while keeping the policy maintainable for a portfolio project.
 
 Before the first pipeline run, create a GitHub Environment named `production`, restrict it to `main`, and configure a required reviewer. No AWS access-key GitHub secrets are required.
 
