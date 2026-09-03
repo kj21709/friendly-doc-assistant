@@ -15,16 +15,17 @@ concurrency:
 
 env:
   SAM_TEMPLATE: template.yaml
+  AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
   TESTING_STACK_NAME: friendly-doc-assistant-test
-  TESTING_PIPELINE_EXECUTION_ROLE: arn:aws:iam::843553758024:role/aws-sam-cli-managed-test-pipe-PipelineExecutionRole-ownjmVvUdKX0
-  TESTING_CLOUDFORMATION_EXECUTION_ROLE: arn:aws:iam::843553758024:role/aws-sam-cli-managed-test--CloudFormationExecutionRo-G2Cj1ibHvtS9
-  TESTING_ARTIFACTS_BUCKET: aws-sam-cli-managed-test-pipeline--artifactsbucket-kxjn7mxkpitm
-  TESTING_REGION: us-east-1
+  TESTING_PIPELINE_EXECUTION_ROLE: ${{ vars.TESTING_PIPELINE_EXECUTION_ROLE }}
+  TESTING_CLOUDFORMATION_EXECUTION_ROLE: ${{ vars.TESTING_CLOUDFORMATION_EXECUTION_ROLE }}
+  TESTING_ARTIFACTS_BUCKET: ${{ vars.TESTING_ARTIFACTS_BUCKET }}
+  TESTING_REGION: ${{ vars.AWS_REGION }}
   PROD_STACK_NAME: friendly-doc-assistant-prod
-  PROD_PIPELINE_EXECUTION_ROLE: arn:aws:iam::843553758024:role/aws-sam-cli-managed-prod-pipe-PipelineExecutionRole-2Cpjcr2c25uW
-  PROD_CLOUDFORMATION_EXECUTION_ROLE: arn:aws:iam::843553758024:role/aws-sam-cli-managed-prod--CloudFormationExecutionRo-xAdTja0oTLAd
-  PROD_ARTIFACTS_BUCKET: aws-sam-cli-managed-prod-pipeline--artifactsbucket-mbapb5fmbnma
-  PROD_REGION: us-east-1
+  PROD_PIPELINE_EXECUTION_ROLE: ${{ vars.PROD_PIPELINE_EXECUTION_ROLE }}
+  PROD_CLOUDFORMATION_EXECUTION_ROLE: ${{ vars.PROD_CLOUDFORMATION_EXECUTION_ROLE }}
+  PROD_ARTIFACTS_BUCKET: ${{ vars.PROD_ARTIFACTS_BUCKET }}
+  PROD_REGION: ${{ vars.AWS_REGION }}
 
 jobs:
   validate:
@@ -48,6 +49,8 @@ jobs:
         run: python -m unittest discover -s tests -v
       - name: Validate SAM template
         run: sam validate --lint --template-file "${SAM_TEMPLATE}"
+      - name: Validate pipeline bootstrap template
+        run: cfn-lint infrastructure/pipeline-bootstrap.yaml
 
   build-and-package:
     needs: [validate]
@@ -62,38 +65,6 @@ jobs:
           use-installer: true
       - name: Build Linux ARM64 resources
         run: sam build --template "${SAM_TEMPLATE}" --use-container
-
-      - name: Show GitHub OIDC claims
-        shell: bash
-        run: |
-          RESPONSE=$(curl \
-            --silent \
-            --show-error \
-            --fail \
-            -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
-            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com")
-
-          ID_TOKEN=$(python3 -c \
-            'import json,sys; print(json.load(sys.stdin)["value"])' \
-            <<< "${RESPONSE}")
-
-          ID_TOKEN="${ID_TOKEN}" python3 - <<'PY'
-          import base64
-          import json
-          import os
-
-          encoded = os.environ["ID_TOKEN"].split(".")[1]
-          encoded += "=" * (-len(encoded) % 4)
-          claims = json.loads(base64.urlsafe_b64decode(encoded))
-
-          print("aud:", claims.get("aud"))
-          print("sub:", claims.get("sub"))
-          print("repository:", claims.get("repository"))
-          print("repository_id:", claims.get("repository_id"))
-          print("repository_owner_id:", claims.get("repository_owner_id"))
-          print("ref:", claims.get("ref"))
-          print("environment:", claims.get("environment"))
-          PY
 
       - name: Assume testing pipeline role with OIDC
         uses: aws-actions/configure-aws-credentials@v6.2.3

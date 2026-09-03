@@ -1,0 +1,328 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Permanent GitHub OIDC, IAM roles, and artifact buckets for the Friendly Document Assistant pipeline.
+
+Parameters:
+  GitHubOwner:
+    Type: String
+    Default: kj21709
+  GitHubOwnerId:
+    Type: String
+    Default: '244645721'
+  GitHubRepository:
+    Type: String
+    Default: friendly-doc-assistant
+  GitHubRepositoryId:
+    Type: String
+    Default: '1347467002'
+  GitHubBranch:
+    Type: String
+    Default: main
+  CreateGitHubOidcProvider:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: Set to true only when token.actions.githubusercontent.com is not already configured in this AWS account.
+
+Conditions:
+  ShouldCreateGitHubOidcProvider: !Equals [!Ref CreateGitHubOidcProvider, 'true']
+
+Resources:
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: ShouldCreateGitHubOidcProvider
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList: [sts.amazonaws.com]
+      Tags:
+        - {Key: Project, Value: friendly-doc-assistant}
+
+  TestingArtifactsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub friendly-doc-assistant-test-artifacts-${AWS::AccountId}-${AWS::Region}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: {SSEAlgorithm: AES256}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration: {Status: Enabled}
+      LifecycleConfiguration:
+        Rules:
+          - Id: RemoveOldArtifacts
+            Status: Enabled
+            NoncurrentVersionExpiration: {NoncurrentDays: 30}
+            ExpirationInDays: 30
+
+  ProductionArtifactsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub friendly-doc-assistant-prod-artifacts-${AWS::AccountId}-${AWS::Region}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: {SSEAlgorithm: AES256}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration: {Status: Enabled}
+      LifecycleConfiguration:
+        Rules:
+          - Id: RemoveOldArtifacts
+            Status: Enabled
+            NoncurrentVersionExpiration: {NoncurrentDays: 30}
+            ExpirationInDays: 30
+
+  TestingCloudFormationExecutionRole:
+    Type: AWS::IAM::Role
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RoleName: friendly-doc-assistant-cloudformation-test
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: cloudformation.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: DeployFriendlyDocumentAssistantTest
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: ManageApplicationServices
+                Effect: Allow
+                Action:
+                  - apigateway:*
+                  - cloudfront:*
+                  - dynamodb:*
+                  - events:*
+                  - lambda:*
+                  - logs:*
+                  - s3:*
+                Resource: '*'
+              - Sid: ManageApplicationRoles
+                Effect: Allow
+                Action:
+                  - iam:AttachRolePolicy
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:DeleteRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:GetRole
+                  - iam:GetRolePolicy
+                  - iam:PassRole
+                  - iam:PutRolePolicy
+                  - iam:TagRole
+                  - iam:UntagRole
+                  - iam:UpdateAssumeRolePolicy
+                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/friendly-doc-assistant-test-*
+              - Sid: ReadDeploymentArtifacts
+                Effect: Allow
+                Action: [s3:GetObject, s3:GetObjectVersion]
+                Resource: !Sub ${TestingArtifactsBucket.Arn}/*
+
+  ProductionCloudFormationExecutionRole:
+    Type: AWS::IAM::Role
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RoleName: friendly-doc-assistant-cloudformation-prod
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: cloudformation.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: DeployFriendlyDocumentAssistantProd
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: ManageApplicationServices
+                Effect: Allow
+                Action:
+                  - apigateway:*
+                  - cloudfront:*
+                  - dynamodb:*
+                  - events:*
+                  - lambda:*
+                  - logs:*
+                  - s3:*
+                Resource: '*'
+              - Sid: ManageApplicationRoles
+                Effect: Allow
+                Action:
+                  - iam:AttachRolePolicy
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:DeleteRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:GetRole
+                  - iam:GetRolePolicy
+                  - iam:PassRole
+                  - iam:PutRolePolicy
+                  - iam:TagRole
+                  - iam:UntagRole
+                  - iam:UpdateAssumeRolePolicy
+                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/friendly-doc-assistant-prod-*
+              - Sid: ReadDeploymentArtifacts
+                Effect: Allow
+                Action: [s3:GetObject, s3:GetObjectVersion]
+                Resource: !Sub ${ProductionArtifactsBucket.Arn}/*
+
+  TestingPipelineExecutionRole:
+    Type: AWS::IAM::Role
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RoleName: friendly-doc-assistant-github-test
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If
+                - ShouldCreateGitHubOidcProvider
+                - !Ref GitHubOidcProvider
+                - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: !Sub repo:${GitHubOwner}@${GitHubOwnerId}/${GitHubRepository}@${GitHubRepositoryId}:ref:refs/heads/${GitHubBranch}
+      Policies:
+        - PolicyName: TestingPipelineAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: PackageArtifacts
+                Effect: Allow
+                Action: [s3:GetBucketLocation, s3:ListBucket]
+                Resource: !GetAtt TestingArtifactsBucket.Arn
+              - Sid: WriteArtifacts
+                Effect: Allow
+                Action: [s3:AbortMultipartUpload, s3:GetObject, s3:PutObject]
+                Resource: !Sub ${TestingArtifactsBucket.Arn}/*
+              - Sid: DeployAndInspectTestStack
+                Effect: Allow
+                Action:
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:DeleteChangeSet
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:DescribeStackEvents
+                  - cloudformation:DescribeStacks
+                  - cloudformation:ExecuteChangeSet
+                  - cloudformation:GetTemplateSummary
+                Resource:
+                  - !Sub arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/friendly-doc-assistant-test/*
+                  - !Sub arn:${AWS::Partition}:cloudformation:${AWS::Region}:aws:transform/Serverless-2016-10-31
+              - Sid: PassTestCloudFormationRole
+                Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt TestingCloudFormationExecutionRole.Arn
+                Condition:
+                  StringEquals: {iam:PassedToService: cloudformation.amazonaws.com}
+              - Sid: PublishAndTestFrontend
+                Effect: Allow
+                Action: [s3:GetObject, s3:PutObject, s3:DeleteObject]
+                Resource: arn:aws:s3:::friendly-doc-assistant-test-*/*
+              - Sid: ListFrontendBucket
+                Effect: Allow
+                Action: [s3:GetBucketLocation, s3:ListBucket]
+                Resource: arn:aws:s3:::friendly-doc-assistant-test-*
+              - Sid: InvalidateCloudFront
+                Effect: Allow
+                Action: cloudfront:CreateInvalidation
+                Resource: !Sub arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/*
+
+  ProductionPipelineExecutionRole:
+    Type: AWS::IAM::Role
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RoleName: friendly-doc-assistant-github-prod
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If
+                - ShouldCreateGitHubOidcProvider
+                - !Ref GitHubOidcProvider
+                - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+              StringLike:
+                token.actions.githubusercontent.com:sub:
+                  - !Sub repo:${GitHubOwner}@${GitHubOwnerId}/${GitHubRepository}@${GitHubRepositoryId}:ref:refs/heads/${GitHubBranch}
+                  - !Sub repo:${GitHubOwner}@${GitHubOwnerId}/${GitHubRepository}@${GitHubRepositoryId}:environment:production
+      Policies:
+        - PolicyName: ProductionPipelineAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: PackageArtifacts
+                Effect: Allow
+                Action: [s3:GetBucketLocation, s3:ListBucket]
+                Resource: !GetAtt ProductionArtifactsBucket.Arn
+              - Sid: WriteArtifacts
+                Effect: Allow
+                Action: [s3:AbortMultipartUpload, s3:GetObject, s3:PutObject]
+                Resource: !Sub ${ProductionArtifactsBucket.Arn}/*
+              - Sid: DeployAndInspectProdStack
+                Effect: Allow
+                Action:
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:DeleteChangeSet
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:DescribeStackEvents
+                  - cloudformation:DescribeStacks
+                  - cloudformation:ExecuteChangeSet
+                  - cloudformation:GetTemplateSummary
+                Resource:
+                  - !Sub arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/friendly-doc-assistant-prod/*
+                  - !Sub arn:${AWS::Partition}:cloudformation:${AWS::Region}:aws:transform/Serverless-2016-10-31
+              - Sid: PassProdCloudFormationRole
+                Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt ProductionCloudFormationExecutionRole.Arn
+                Condition:
+                  StringEquals: {iam:PassedToService: cloudformation.amazonaws.com}
+              - Sid: PublishAndTestFrontend
+                Effect: Allow
+                Action: [s3:GetObject, s3:PutObject, s3:DeleteObject]
+                Resource: arn:aws:s3:::friendly-doc-assistant-prod-*/*
+              - Sid: ListFrontendBucket
+                Effect: Allow
+                Action: [s3:GetBucketLocation, s3:ListBucket]
+                Resource: arn:aws:s3:::friendly-doc-assistant-prod-*
+              - Sid: InvalidateCloudFront
+                Effect: Allow
+                Action: cloudfront:CreateInvalidation
+                Resource: !Sub arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/*
+
+Outputs:
+  TestingPipelineExecutionRoleArn:
+    Value: !GetAtt TestingPipelineExecutionRole.Arn
+  TestingCloudFormationExecutionRoleArn:
+    Value: !GetAtt TestingCloudFormationExecutionRole.Arn
+  TestingArtifactsBucketName:
+    Value: !Ref TestingArtifactsBucket
+  ProductionPipelineExecutionRoleArn:
+    Value: !GetAtt ProductionPipelineExecutionRole.Arn
+  ProductionCloudFormationExecutionRoleArn:
+    Value: !GetAtt ProductionCloudFormationExecutionRole.Arn
+  ProductionArtifactsBucketName:
+    Value: !Ref ProductionArtifactsBucket

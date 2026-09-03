@@ -1,6 +1,46 @@
 # Friendly Document Assistant
 
-A deployable serverless RAG application based on the supplied `agent_v7.py` and `embed_documents_v5_s3.py`. Users enter their name, upload one TXT or text-based PDF, wait for vectorization, and chat strictly against that selected document. Chat turns are stored in DynamoDB under the supplied name as `userId`.
+I built this serverless document chatbot as part of my transition from IT Analyst work into AWS Cloud Engineering. The project gave me hands-on experience with infrastructure as code, serverless services, Amazon Bedrock, retrieval-augmented generation (RAG), logging, security roles, and automated deployments.
+
+Users can upload a TXT or text-based PDF, wait for it to be indexed, and ask questions against that selected document. The goal is not to create a general-purpose chatbot. It is to provide answers grounded in an approved document and clearly refuse questions that the document cannot answer.
+
+## Portfolio goal
+
+As an IT Analyst, I regularly work with technical procedures, troubleshooting notes, support documentation, and company policies. I wanted to explore how AWS could turn that type of information into a searchable internal assistant while keeping the source documents private and separating each document's knowledge index.
+
+This project demonstrates my ability to:
+
+- Translate an IT support use case into a cloud architecture
+- Build and connect managed AWS services with SAM and CloudFormation
+- Use Amazon Bedrock for embeddings and language-model responses
+- Add practical controls that reduce unsupported AI answers
+- Troubleshoot IAM, OIDC, model invocation, ARM64 builds, and deployment issues
+- Move a local Docker-based deployment into a test-to-production CI/CD pipeline
+
+## Example business uses
+
+### Internal IT support
+
+An IT team could upload approved knowledge-base articles, standard operating procedures, onboarding instructions, or troubleshooting guides. Support staff could ask questions such as “How do I reset this application?” or “What are the escalation steps?” and receive an answer based on the selected document. This could reduce time spent searching shared folders while keeping the original document as the source of truth.
+
+### HR policy assistant
+
+The same design could support approved employee handbooks, leave policies, benefit summaries, or onboarding documents. Employees could ask plain-language questions and receive document-grounded answers. A real HR deployment would require authentication, authorization, privacy review, audit controls, and careful handling of sensitive information.
+
+## Hallucination controls
+
+The application uses several guardrails to reduce hallucination risk:
+
+- It retrieves only the four most relevant excerpts from the selected document.
+- The system prompt requires every factual statement to be supported by those excerpts.
+- Document excerpts are placed inside explicit `<excerpt>` boundaries so document text is treated as evidence rather than system instructions.
+- If the excerpts are insufficient, the assistant must respond: `I couldn't find that information in the provided document.`
+- Previous conversation is used only for continuity and is explicitly not treated as factual evidence.
+- Chat history from other documents is excluded from the prompt.
+- A low temperature is used to make responses more consistent.
+- Each uploaded document receives a separate vector index, reducing accidental cross-document retrieval.
+
+These controls reduce risk but do not guarantee that a model can never produce an incorrect response. Before using this design for sensitive production decisions, I would add Amazon Bedrock Guardrails, source citations, automated groundedness evaluations, authenticated users, and human review for high-impact answers.
 
 ## Architecture
 
@@ -29,23 +69,23 @@ The browser/API replaces Amazon Lex from the original conceptual diagram. For ty
 - TXT and text-based PDF extraction, 900-character chunks, 150-character overlap
 - Titan Text Embeddings V2 with normalized, configurable vectors (512 dimensions by default)
 - A separate S3 vector index for every `userId` + `documentId`
-- Anthropic Claude Haiku 4.5 answers through a US geographic cross-Region inference profile, with a strict grounding prompt and prompt-injection boundary
+- Anthropic Claude Haiku 4.5 answers through a configurable Bedrock inference profile, with a strict grounding prompt and prompt-injection boundary
 - DynamoDB document status and per-user chat history with point-in-time recovery
 - Ready-document selection so the same name can resume earlier document conversations
 - EventBridge-driven asynchronous vectorization and frontend readiness polling
 - Automatic previous-session history plus `history`, `clear history`, and `exit`/`bye` chat commands
 - A shared NumPy/PyPDF Lambda layer attached only to the functions that need native document/vector dependencies
-- Least-purpose Lambda roles, encryption, versioning, X-Ray, throttling, and upload limits
+- Separate API and vectorizer Lambda roles, encryption, versioning, X-Ray, throttling, and upload limits
 
 ## Important identity limitation
 
-The requested name is stored as the DynamoDB `userId`. A name is **not authentication**: two people using the same spelling would share that logical history, and a visitor could impersonate another name. This is appropriate only for a portfolio/demo. Before storing private or regulated documents, add Amazon Cognito and use the immutable Cognito `sub` as the partition key while keeping the person's name as a display attribute.
+The requested name is stored as the DynamoDB `userId`. Name/UserId used is not for authentication purposes. this is simply to keep track of chat history.
 
 ## Prerequisites
 
 1. AWS CLI v2, Docker, and AWS SAM CLI installed on your Mac.
 2. AWS credentials configured (`aws sts get-caller-identity` should succeed).
-3. Deploy to a source Region supported by `amazon.titan-embed-text-v2:0` and the Claude Haiku 4.5 US inference profile—the defaults use `us-east-1`.
+3. Deploy to a source Region supported by `amazon.titan-embed-text-v2:0` and the configured Claude Haiku 4.5 inference profile—the defaults use `us-east-1`.
 4. Permission to create CloudFormation, IAM, Lambda, S3, DynamoDB, API Gateway, EventBridge, CloudFront, and Bedrock resources.
 5. Anthropic model access enabled for the AWS account. First-time Anthropic users must submit the Bedrock model use-case form and accept any required model agreement.
 
@@ -131,7 +171,7 @@ After deployment, upload a small TXT file containing a unique fact, ask for that
 
 ## Operational notes
 
-- The 10 MB upload cap and 2,000-chunk cap protect a demo stack from unexpectedly large embedding jobs.
+- The 12 MB upload cap and 2,000-chunk cap protect a demo stack from unexpectedly large embedding jobs.
 - NumPy performs vectorized dot-product similarity against normalized embeddings. This is substantially faster and more compact than Python loops while avoiding the fixed cost of an always-on managed vector database. It is suitable for small/medium single documents, not a large corpus. At larger scale, replace the S3 NumPy index with OpenSearch Serverless, Aurora PostgreSQL/pgvector, or another managed vector index.
 - The vectorization Lambda can run for up to 15 minutes. Large documents may generate many synchronous Bedrock calls and should be moved to Step Functions or an SQS worker if you raise the limits.
 - CORS is open because CloudFront's generated hostname is not known until stack creation. For production, use a custom domain and restrict both API and upload-bucket CORS to that origin.
@@ -167,7 +207,9 @@ Look for `AccessDeniedException`, `FTUFormNotFilled`, `ValidationException`, or 
 
 ## GitHub Actions CI/CD pipeline
 
-The workflow in `.github/workflows/pipeline.yaml` uses GitHub OIDC and short-lived AWS credentials. It runs automatically for a push to `main` and can also be started from the GitHub Actions **Run workflow** button. It does not use repository access-key secrets or AWS CodePipeline.
+I initially deployed the project from my Mac with AWS SAM and Docker Desktop. Docker was needed because the Lambda layer includes NumPy and must be built for the Linux ARM64 Lambda environment rather than the local macOS environment. The local workflow helped me understand each step: build the application, package artifacts, deploy the CloudFormation stack, publish the frontend to S3, and invalidate CloudFront.
+
+I then evolved that manual process into `.github/workflows/pipeline.yaml`. GitHub Actions now performs the repeatable build and deployment process, and GitHub OIDC provides temporary AWS credentials instead of storing long-lived access keys in the repository. A native ARM64 GitHub runner builds the Lambda artifacts without x86-to-ARM emulation.
 
 The stages run in this order:
 
@@ -179,51 +221,46 @@ The stages run in this order:
 6. Production approval — the `production` GitHub Environment pauses the workflow for an authorized reviewer.
 7. Deploy production — deploy `friendly-doc-assistant-prod`, publish its frontend, and run the same API smoke test with 14-day chat-log retention.
 
-Before the first run, configure the following outside the repository:
+This progression gave me practical experience with deployment promotion, environment-specific IAM roles, OIDC trust claims, build artifacts, smoke tests, and manual production approval. It also showed why a successful local deployment is only the starting point: CI/CD makes the process consistent, reviewable, and repeatable.
 
-- Create the GitHub OIDC provider in AWS IAM with audience `sts.amazonaws.com`.
-- Allow the test pipeline role to assume the role from `repo:kj21709/friendly-doc-assistant:ref:refs/heads/main`.
-- Allow the production pipeline role from both `repo:kj21709/friendly-doc-assistant:ref:refs/heads/main` (packaging) and `repo:kj21709/friendly-doc-assistant:environment:production` (deployment).
-- Create a GitHub Environment named `production`, restrict it to `main`, and configure a required reviewer.
-- Ensure both pipeline execution roles can call `cloudformation:DescribeStacks`, sync the corresponding generated website bucket (`s3:ListBucket`, `s3:GetObject`, `s3:PutObject`, and `s3:DeleteObject`), and call `cloudfront:CreateInvalidation`. The SAM bootstrap roles normally cover packaging and CloudFormation role assumption; frontend publication may require this additional inline policy.
-- Keep each CloudFormation execution role trusted by CloudFormation and passable by only its corresponding pipeline execution role.
+### One-time pipeline bootstrap
 
-Attach an inline frontend-publication policy to each pipeline execution role if those permissions are not already present. Replace `<STACK_NAME>` with `friendly-doc-assistant-test` on the test role and `friendly-doc-assistant-prod` on the production role:
+I keep the permanent CI/CD identity resources separate from the application stacks in `infrastructure/pipeline-bootstrap.yaml`. This template creates predictable test and production GitHub roles, separate CloudFormation execution roles, and encrypted artifact buckets. It uses the repository's ID-based OIDC subject claims so renamed GitHub owners or repositories cannot silently inherit access.
 
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": "cloudformation:DescribeStacks",
-      "Resource": "arn:aws:cloudformation:us-east-1:843553758024:stack/<STACK_NAME>/*"
-    },
-    {
-      "Effect": "Allow",
-      "Action": "s3:ListBucket",
-      "Resource": "arn:aws:s3:::<STACK_NAME>-websitebucket-*"
-    },
-    {
-      "Effect": "Allow",
-      "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
-      "Resource": "arn:aws:s3:::<STACK_NAME>-websitebucket-*/*"
-    },
-    {
-      "Effect": "Allow",
-      "Action": "cloudfront:CreateInvalidation",
-      "Resource": "arn:aws:cloudfront::843553758024:distribution/*"
-    }
-  ]
-}
+This is an intentional bootstrap boundary: GitHub cannot create the first AWS role it needs in order to authenticate to AWS. I deploy this stack once from a trusted local AWS administrator session, and all later application deployments use short-lived GitHub OIDC credentials.
+
+If the AWS account already contains the GitHub OIDC provider, which is the normal case for this project, run:
+
+```bash
+chmod +x scripts/bootstrap-pipeline.sh
+./scripts/bootstrap-pipeline.sh
 ```
 
-CloudFormation lowercases generated S3 bucket names, so the stack-name patterns above are lowercase intentionally. If your organization disallows wildcard distribution access, deploy the stack once, read its `DistributionId` output, and replace `distribution/*` with that exact distribution ID.
+If this account does not yet have `token.actions.githubusercontent.com` configured, create it with the same stack:
+
+```bash
+CREATE_GITHUB_OIDC_PROVIDER=true ./scripts/bootstrap-pipeline.sh
+```
+
+Do not set that option to `true` when the provider already exists because an AWS account can only register that provider URL once. The script deploys `friendly-doc-assistant-cicd-bootstrap`, enables CloudFormation termination protection, and prints its outputs. Artifact buckets and named roles also have retention policies as a second safeguard.
+
+The workflow references these predictable resources directly:
+
+- `friendly-doc-assistant-github-test`
+- `friendly-doc-assistant-github-prod`
+- `friendly-doc-assistant-cloudformation-test`
+- `friendly-doc-assistant-cloudformation-prod`
+- `friendly-doc-assistant-test-artifacts-843553758024-us-east-1`
+- `friendly-doc-assistant-prod-artifacts-843553758024-us-east-1`
+
+The CloudFormation roles are scoped to AWS services used by this application and can manage only project-prefixed application IAM roles. The GitHub roles can package artifacts, deploy only their corresponding stack through the matching CloudFormation role, publish the matching frontend, and invalidate CloudFront. This separation limits the impact of a compromised workflow while keeping the policy maintainable for a portfolio project.
+
+Before the first pipeline run, create a GitHub Environment named `production`, restrict it to `main`, and configure a required reviewer. No AWS access-key GitHub secrets are required.
 
 To start the pipeline with a commit:
 
 ```bash
-git add .github/workflows/pipeline.yaml scripts README.md frontend
+git add infrastructure .github/workflows/pipeline.yaml scripts README.md
 git commit -m "Complete GitHub Actions deployment pipeline"
 git push origin main
 ```
@@ -241,5 +278,7 @@ The buckets are versioned, so CloudFormation cannot remove non-empty buckets its
 ```bash
 ./scripts/delete-stack.sh
 ```
+
+The cleanup script accepts only `friendly-doc-assistant`, `friendly-doc-assistant-test`, or `friendly-doc-assistant-prod`. It deliberately refuses the CI/CD bootstrap stack so deleting an application cannot remove the OIDC roles needed to deploy it again. To remove bootstrap infrastructure, an administrator must first disable termination protection and deliberately delete that stack outside this helper.
 
 For a production system, use a retention/deletion policy appropriate to your data requirements rather than automatically deleting stored documents and history.

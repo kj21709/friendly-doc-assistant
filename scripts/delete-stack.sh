@@ -3,6 +3,15 @@ set -euo pipefail
 STACK_NAME="${1:-friendly-doc-assistant}"
 AWS_REGION="${AWS_REGION:-us-east-1}"
 
+case "$STACK_NAME" in
+  friendly-doc-assistant|friendly-doc-assistant-test|friendly-doc-assistant-prod) ;;
+  *)
+    echo "Refusing to delete '$STACK_NAME'. This script only deletes Friendly Document Assistant application stacks." >&2
+    echo "The friendly-doc-assistant-cicd-bootstrap stack is intentionally protected." >&2
+    exit 2
+    ;;
+esac
+
 for OUTPUT in WebsiteBucketName DocumentBucketName; do
   BUCKET="$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$AWS_REGION" --query "Stacks[0].Outputs[?OutputKey=='$OUTPUT'].OutputValue" --output text)"
   if [[ -n "$BUCKET" && "$BUCKET" != "None" ]]; then
