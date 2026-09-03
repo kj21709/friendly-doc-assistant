@@ -134,6 +134,7 @@ jobs:
             --template-file packaged-testing.yaml \
             --capabilities CAPABILITY_IAM \
             --region "${TESTING_REGION}" \
+            --no-resolve-s3 \
             --no-confirm-changeset \
             --no-fail-on-empty-changeset \
             --role-arn "${TESTING_CLOUDFORMATION_EXECUTION_ROLE}" \
@@ -211,6 +212,7 @@ jobs:
             --template-file packaged-prod.yaml \
             --capabilities CAPABILITY_IAM \
             --region "${PROD_REGION}" \
+            --no-resolve-s3 \
             --no-confirm-changeset \
             --no-fail-on-empty-changeset \
             --role-arn "${PROD_CLOUDFORMATION_EXECUTION_ROLE}" \

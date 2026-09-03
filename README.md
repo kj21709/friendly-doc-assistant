@@ -255,6 +255,8 @@ The workflow references these predictable resources directly:
 
 The CloudFormation roles are scoped to AWS services used by this application and can manage only project-prefixed application IAM roles. They can also apply the AWS SAM transform, which CloudFormation invokes while creating the application's change set. The GitHub roles can package artifacts, deploy only their corresponding stack through the matching CloudFormation role, publish the matching frontend, and invalidate CloudFront. This separation limits the impact of a compromised workflow while keeping the policy maintainable for a portfolio project.
 
+The build job packages Lambda artifacts into the dedicated test and production buckets before deployment. Both deploy commands use `--no-resolve-s3` so the local `samconfig.toml` setting cannot make SAM create an unrelated `aws-sam-cli-managed-default` stack. This keeps artifact storage owned by the protected bootstrap stack and avoids giving the GitHub roles permission to create SAM-managed infrastructure.
+
 Before the first pipeline run, create a GitHub Environment named `production`, restrict it to `main`, and configure a required reviewer. No AWS access-key GitHub secrets are required.
 
 To start the pipeline with a commit:
